@@ -6,13 +6,13 @@ from models import SensorReading
 advisory_bp = Blueprint("advisory", __name__, url_prefix="/api/advisory")
 
 
-def classify_status(reading: SensorReading) -> str:
+def classify_status(reading: SensorReading) -> dict:
     """Placeholder threshold-based status, until the LSTM model is integrated."""
     if reading.soil_moisture < 30:
-        return "dry - irrigation likely needed"
+        return {"level": "warning", "label": "Dry - irrigation likely needed"}
     if reading.soil_moisture > 75:
-        return "overwatered - risk of root rot"
-    return "normal"
+        return {"level": "serious", "label": "Overwatered - risk of root rot"}
+    return {"level": "good", "label": "Normal"}
 
 
 @advisory_bp.post("")
@@ -24,7 +24,7 @@ def get_advisory():
     status = classify_status(reading)
 
     try:
-        advisory_text = generate_advisory_text(reading.to_dict(), status)
+        advisory_text = generate_advisory_text(reading.to_dict(), status["label"])
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 500
     except Exception as e:

@@ -1,6 +1,7 @@
 import os
 
 from flask import Flask
+from flask_cors import CORS
 
 from config import Config
 from extensions import db
@@ -13,6 +14,7 @@ from routes.sensors import sensors_bp
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
+    CORS(app)
 
     os.makedirs(os.path.join(Config.BASE_DIR, "instance"), exist_ok=True)
 
