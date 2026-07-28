@@ -27,3 +27,23 @@ class SensorReading(db.Model):
             "light_level": self.light_level,
             "color": {"r": self.color_r, "g": self.color_g, "b": self.color_b},
         }
+
+
+class IrrigationCommand(db.Model):
+    __tablename__ = "irrigation_commands"
+
+    id = db.Column(db.Integer, primary_key=True)
+    requested_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    duration_seconds = db.Column(db.Integer, nullable=False)
+
+    # Set once the ESP32 has polled and picked up this command
+    consumed_at = db.Column(db.DateTime, nullable=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "requested_at": self.requested_at.isoformat(),
+            "duration_seconds": self.duration_seconds,
+            "picked_up": self.consumed_at is not None,
+            "consumed_at": self.consumed_at.isoformat() if self.consumed_at else None,
+        }
