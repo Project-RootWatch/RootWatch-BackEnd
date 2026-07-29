@@ -24,7 +24,7 @@ def get_advisory():
     status = classify_status(reading)
 
     try:
-        advisory_text = generate_advisory_text(reading.to_dict(), status["label"])
+        advisory = generate_advisory_text(reading.to_dict(), status["label"])
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 500
     except Exception as e:
@@ -33,7 +33,7 @@ def get_advisory():
     return jsonify(
         {
             "status": status,
-            "advisory_text": advisory_text,
+            "advisory": {"sinhala": advisory.sinhala, "english": advisory.english},
             "based_on_reading": reading.to_dict(),
         }
     )

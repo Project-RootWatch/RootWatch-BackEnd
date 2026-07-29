@@ -1,5 +1,6 @@
 from google import genai
 from google.genai import types
+from pydantic import BaseModel
 
 from config import Config
 
@@ -18,11 +19,25 @@ def get_client():
     return _client
 
 
-def generate_advisory_text(reading: dict, status: str) -> str:
+class AdvisoryText(BaseModel):
+    sinhala: str
+    english: str
+
+
+class PlantAssessment(BaseModel):
+    headline: str
+    description: str
+    disease: str  # one of: none, mild, severe
+    stress: str  # one of: none, mild, moderate, severe
+    growth: str  # one of: poor, normal, vigorous
+
+
+def generate_advisory_text(reading: dict, status: str) -> AdvisoryText:
     prompt = f"""You are an agricultural advisor helping a small-scale farmer in Sri Lanka.
-Based on the sensor readings below, write a short, practical advisory in
-Sinhala (2-4 sentences, plain language, no technical jargon). Be specific
-about any action the farmer should take right now, if any.
+Based on the sensor readings below, write a short, practical advisory (2-4
+sentences, plain language, no technical jargon). Be specific about any
+action the farmer should take right now, if any. Provide the same advisory
+in both Sinhala and English.
 
 Soil moisture: {reading['soil_moisture']}%
 Temperature: {reading['temperature']} C
@@ -31,23 +46,38 @@ Leaf color reading (RGB): R={reading['color']['r']} G={reading['color']['g']} B=
 Overall status: {status}
 """
     client = get_client()
-    response = client.models.generate_content(model=TEXT_MODEL, contents=prompt)
-    return response.text
+    response = client.models.generate_content(
+        model=TEXT_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=AdvisoryText,
+        ),
+    )
+    return response.parsed
 
 
-def analyze_plant_photo(image_bytes: bytes, mime_type: str) -> str:
+def analyze_plant_photo(image_bytes: bytes, mime_type: str) -> PlantAssessment:
     prompt = """You are an agricultural advisor helping a small-scale farmer in Sri Lanka
 assess the health of their plant from a leaf photo. Look at the leaf color,
-spots, wilting, or discoloration. Write a short, practical assessment in
-Sinhala (2-4 sentences, plain language, no technical jargon): say whether
-the plant looks healthy, what issue you notice if any, and what action to
-take if needed."""
+spots, wilting, or discoloration.
+
+Return:
+- headline: a short Sinhala headline (e.g. "රෝගී ලක්ෂණ නොමැත" for "no disease
+  detected")
+- description: 2-4 sentence Sinhala assessment, plain language, no jargon,
+  including any action to take
+- disease: exactly one of "none", "mild", "severe"
+- stress: exactly one of "none", "mild", "moderate", "severe"
+- growth: exactly one of "poor", "normal", "vigorous"
+"""
     client = get_client()
     response = client.models.generate_content(
         model=VISION_MODEL,
-        contents=[
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            prompt,
-        ],
+        contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime_type), prompt],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=PlantAssessment,
+        ),
     )
-    return response.text
+    return response.parsed

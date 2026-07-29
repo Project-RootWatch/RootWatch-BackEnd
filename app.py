@@ -5,6 +5,7 @@ from flask_cors import CORS
 
 from config import Config
 from extensions import db
+from routes.activity import activity_bp
 from routes.advisory import advisory_bp
 from routes.irrigation import irrigation_bp
 from routes.plant_health import plant_health_bp
@@ -26,6 +27,7 @@ def create_app():
     app.register_blueprint(advisory_bp)
     app.register_blueprint(plant_health_bp)
     app.register_blueprint(irrigation_bp)
+    app.register_blueprint(activity_bp)
 
     @app.get("/health")
     def health():

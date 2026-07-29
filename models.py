@@ -47,3 +47,27 @@ class IrrigationCommand(db.Model):
             "picked_up": self.consumed_at is not None,
             "consumed_at": self.consumed_at.isoformat() if self.consumed_at else None,
         }
+
+
+class PlantScan(db.Model):
+    __tablename__ = "plant_scans"
+
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+    headline = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    disease = db.Column(db.String(20), nullable=False)
+    stress = db.Column(db.String(20), nullable=False)
+    growth = db.Column(db.String(20), nullable=False)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "created_at": self.created_at.isoformat(),
+            "headline": self.headline,
+            "description": self.description,
+            "disease": self.disease,
+            "stress": self.stress,
+            "growth": self.growth,
+        }
