@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from models import IrrigationCommand, PlantScan, SensorReading
+from models import IrrigationCommand, PlantScan, SensorReading, to_utc_iso
 
 activity_bp = Blueprint("activity", __name__, url_prefix="/api/activity")
 
@@ -17,7 +17,7 @@ def get_activity():
             {
                 "type": "reading",
                 "label": f"Moisture {r.soil_moisture:.0f}% recorded",
-                "timestamp": r.timestamp.isoformat(),
+                "timestamp": to_utc_iso(r.timestamp),
             }
         )
 
@@ -26,7 +26,7 @@ def get_activity():
             {
                 "type": "irrigation",
                 "label": f"Irrigation triggered - {c.duration_seconds}s",
-                "timestamp": c.requested_at.isoformat(),
+                "timestamp": to_utc_iso(c.requested_at),
             }
         )
 
@@ -35,7 +35,7 @@ def get_activity():
             {
                 "type": "plant_scan",
                 "label": f"Plant scan - {s.headline}",
-                "timestamp": s.created_at.isoformat(),
+                "timestamp": to_utc_iso(s.created_at),
             }
         )
 

@@ -3,6 +3,17 @@ from datetime import datetime, timezone
 from extensions import db
 
 
+def to_utc_iso(dt):
+    """SQLite drops tzinfo on read, so a value we always wrote as UTC comes
+    back naive. Re-attach UTC before formatting or JS Date() misreads it as
+    local time on the client."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
 class SensorReading(db.Model):
     __tablename__ = "sensor_readings"
 
@@ -21,7 +32,7 @@ class SensorReading(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
-            "timestamp": self.timestamp.isoformat(),
+            "timestamp": to_utc_iso(self.timestamp),
             "soil_moisture": self.soil_moisture,
             "temperature": self.temperature,
             "light_level": self.light_level,
@@ -42,10 +53,10 @@ class IrrigationCommand(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
-            "requested_at": self.requested_at.isoformat(),
+            "requested_at": to_utc_iso(self.requested_at),
             "duration_seconds": self.duration_seconds,
             "picked_up": self.consumed_at is not None,
-            "consumed_at": self.consumed_at.isoformat() if self.consumed_at else None,
+            "consumed_at": to_utc_iso(self.consumed_at),
         }
 
 
@@ -64,7 +75,7 @@ class PlantScan(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
-            "created_at": self.created_at.isoformat(),
+            "created_at": to_utc_iso(self.created_at),
             "headline": self.headline,
             "description": self.description,
             "disease": self.disease,
