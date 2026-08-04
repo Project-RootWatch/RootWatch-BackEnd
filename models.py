@@ -24,19 +24,22 @@ class SensorReading(db.Model):
     temperature = db.Column(db.Float, nullable=False)  # Celsius
     light_level = db.Column(db.Float, nullable=False)  # percentage, 0-100 (from LDR voltage divider)
 
-    # Raw TCS3200 channel readings, used for leaf color tracking over time
-    color_r = db.Column(db.Integer, nullable=False)
-    color_g = db.Column(db.Integer, nullable=False)
-    color_b = db.Column(db.Integer, nullable=False)
+    # Raw TCS3200 channel readings, used for leaf color tracking over time.
+    # Nullable: the TCS3200 isn't wired up on the ESP32 yet, so readings
+    # arrive without color data until it is.
+    color_r = db.Column(db.Integer, nullable=True)
+    color_g = db.Column(db.Integer, nullable=True)
+    color_b = db.Column(db.Integer, nullable=True)
 
     def to_dict(self):
+        has_color = self.color_r is not None
         return {
             "id": self.id,
             "timestamp": to_utc_iso(self.timestamp),
             "soil_moisture": self.soil_moisture,
             "temperature": self.temperature,
             "light_level": self.light_level,
-            "color": {"r": self.color_r, "g": self.color_g, "b": self.color_b},
+            "color": {"r": self.color_r, "g": self.color_g, "b": self.color_b} if has_color else None,
         }
 
 

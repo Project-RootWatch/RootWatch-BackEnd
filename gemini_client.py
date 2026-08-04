@@ -33,6 +33,13 @@ class PlantAssessment(BaseModel):
 
 
 def generate_advisory_text(reading: dict, status: str) -> AdvisoryText:
+    color = reading.get("color")
+    color_line = (
+        f"Leaf color reading (RGB): R={color['r']} G={color['g']} B={color['b']}"
+        if color
+        else "Leaf color reading: not available (color sensor not connected)"
+    )
+
     prompt = f"""You are an agricultural advisor helping a small-scale farmer in Sri Lanka.
 Based on the sensor readings below, write a short, practical advisory (2-4
 sentences, plain language, no technical jargon). Be specific about any
@@ -42,7 +49,7 @@ in both Sinhala and English.
 Soil moisture: {reading['soil_moisture']}%
 Temperature: {reading['temperature']} C
 Light level: {reading['light_level']}%
-Leaf color reading (RGB): R={reading['color']['r']} G={reading['color']['g']} B={reading['color']['b']}
+{color_line}
 Overall status: {status}
 """
     client = get_client()
