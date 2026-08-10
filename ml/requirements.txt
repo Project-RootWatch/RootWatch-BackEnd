@@ -1,0 +1,9 @@
+# Training-only dependencies. The deployed backend will only need `torch`
+# (plus numpy, which torch pulls in anyway) to actually LOAD and run the
+# exported model — pandas/matplotlib/scikit-learn are for this ml/
+# workspace's data prep and plots, not for serving predictions.
+torch
+numpy
+pandas
+matplotlib
+scikit-learn

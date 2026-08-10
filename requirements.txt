@@ -4,3 +4,4 @@ flask-sqlalchemy
 flask-jwt-extended
 python-dotenv
 google-genai
+torch
