@@ -57,6 +57,7 @@ def get_current_reading():
 
 
 @sensors_bp.get("/history")
+@jwt_required()
 def get_reading_history():
     limit = request.args.get("limit", default=100, type=int)
     limit = max(1, min(limit, 1000))
