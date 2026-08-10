@@ -1,8 +1,11 @@
-from datetime import datetime, timezone
+import secrets
+from datetime import datetime, timedelta, timezone
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from extensions import db
+
+RESET_TOKEN_LIFETIME = timedelta(hours=1)
 
 
 def to_utc_iso(dt):
