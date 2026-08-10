@@ -9,6 +9,7 @@ from extensions import db
 from routes.activity import activity_bp
 from routes.advisory import advisory_bp
 from routes.auth import auth_bp
+from routes.forecast import forecast_bp
 from routes.irrigation import irrigation_bp
 from routes.plant_health import plant_health_bp
 from routes.sensors import sensors_bp
