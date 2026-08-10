@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+from flask_jwt_extended import jwt_required
 
 from extensions import db
 from models import SensorReading
@@ -11,6 +12,7 @@ COLOR_FIELDS = ["color_r", "color_g", "color_b"]
 
 @sensors_bp.post("")
 def create_reading():
+    # No @jwt_required() here on purpose — the ESP32 doesn't log in.
     data = request.get_json(silent=True)
     if data is None:
         return jsonify({"error": "Request body must be JSON"}), 400
@@ -45,6 +47,7 @@ def create_reading():
 
 
 @sensors_bp.get("/current")
+@jwt_required()
 def get_current_reading():
     reading = SensorReading.query.order_by(SensorReading.timestamp.desc()).first()
     if reading is None:
