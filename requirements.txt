@@ -1,5 +1,6 @@
 flask
 flask-cors
 flask-sqlalchemy
+flask-jwt-extended
 python-dotenv
 google-genai
