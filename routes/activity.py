@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+from flask_jwt_extended import jwt_required
 
 from models import IrrigationCommand, PlantScan, SensorReading, to_utc_iso
 
@@ -6,6 +7,7 @@ activity_bp = Blueprint("activity", __name__, url_prefix="/api/activity")
 
 
 @activity_bp.get("")
+@jwt_required()
 def get_activity():
     limit = request.args.get("limit", default=20, type=int)
     limit = max(1, min(limit, 100))

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
+from flask_jwt_extended import jwt_required
 
 from extensions import db
 from models import IrrigationCommand
@@ -9,6 +10,7 @@ irrigation_bp = Blueprint("irrigation", __name__, url_prefix="/api/irrigation")
 
 
 @irrigation_bp.post("/trigger")
+@jwt_required()
 def trigger_irrigation():
     data = request.get_json(silent=True) or {}
     max_duration = current_app.config["IRRIGATION_MAX_DURATION_SECONDS"]
@@ -30,7 +32,8 @@ def trigger_irrigation():
 
 @irrigation_bp.get("/command")
 def get_pending_command():
-    """Polled by the ESP32. Returns the oldest un-picked-up command, if any."""
+    """Polled by the ESP32 — no @jwt_required() here, the device doesn't
+    log in. Returns the oldest un-picked-up command, if any."""
     command = (
         IrrigationCommand.query.filter(IrrigationCommand.consumed_at.is_(None))
         .order_by(IrrigationCommand.requested_at.asc())
@@ -47,6 +50,7 @@ def get_pending_command():
 
 
 @irrigation_bp.get("/status")
+@jwt_required()
 def get_status():
     command = IrrigationCommand.query.order_by(IrrigationCommand.requested_at.desc()).first()
     if command is None:

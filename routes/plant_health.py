@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+from flask_jwt_extended import jwt_required
 
 from extensions import db
 from gemini_client import analyze_plant_photo
@@ -11,6 +12,7 @@ MAX_PHOTO_BYTES = 8 * 1024 * 1024  # 8 MB
 
 
 @plant_health_bp.post("")
+@jwt_required()
 def assess_plant_photo():
     if "photo" not in request.files:
         return jsonify({"error": "No photo uploaded. Send as multipart/form-data field 'photo'."}), 400
@@ -48,6 +50,7 @@ def assess_plant_photo():
 
 
 @plant_health_bp.get("/history")
+@jwt_required()
 def get_scan_history():
     limit = request.args.get("limit", default=10, type=int)
     limit = max(1, min(limit, 50))

@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify
+from flask_jwt_extended import jwt_required
 
 from gemini_client import generate_advisory_text
 from models import SensorReading
@@ -16,6 +17,7 @@ def classify_status(reading: SensorReading) -> dict:
 
 
 @advisory_bp.post("")
+@jwt_required()
 def get_advisory():
     reading = SensorReading.query.order_by(SensorReading.timestamp.desc()).first()
     if reading is None:
