@@ -49,6 +49,7 @@ def create_app():
     app.register_blueprint(plant_health_bp)
     app.register_blueprint(irrigation_bp)
     app.register_blueprint(activity_bp)
+    app.register_blueprint(forecast_bp)
 
     @app.get("/health")
     def health():
