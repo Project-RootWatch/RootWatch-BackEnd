@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
@@ -93,7 +94,7 @@ def reset_password():
 
     user = db.session.get(User, reset.user_id)
     user.set_password(password)
-    reset.used_at = db.func.now()
+    reset.used_at = datetime.now(timezone.utc)
     db.session.commit()
 
     return jsonify({"message": "Password updated. You can now log in."})
