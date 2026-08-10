@@ -25,3 +25,7 @@ class Config:
     # source could forge tokens).
     JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-insecure-secret-change-me")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=7)
+
+    # Used to build the password-reset link. Point this at wherever the web
+    # dashboard actually runs.
+    FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")

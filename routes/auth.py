@@ -1,10 +1,11 @@
 import re
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
 
 from extensions import db
-from models import User
+from mailer import send_reset_email
+from models import PasswordResetToken, User
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
@@ -55,3 +56,44 @@ def me():
     if user is None:
         return jsonify({"error": "User not found"}), 404
     return jsonify(user.to_dict())
+
+
+@auth_bp.post("/forgot-password")
+def forgot_password():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+
+    user = User.query.filter_by(email=email).first()
+    if user is not None:
+        reset = PasswordResetToken.create_for(user)
+        db.session.add(reset)
+        db.session.commit()
+
+        reset_link = f"{current_app.config['FRONTEND_URL']}/reset-password?token={reset.token}"
+        send_reset_email(user.email, reset_link)
+
+    # Same response whether or not the email exists — otherwise this
+    # endpoint becomes a way for anyone to check which emails are
+    # registered, one guess at a time.
+    return jsonify({"message": "If an account exists for that email, a reset link has been sent."})
+
+
+@auth_bp.post("/reset-password")
+def reset_password():
+    data = request.get_json(silent=True) or {}
+    token = data.get("token") or ""
+    password = data.get("password") or ""
+
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return jsonify({"error": f"Password must be at least {MIN_PASSWORD_LENGTH} characters"}), 400
+
+    reset = PasswordResetToken.query.filter_by(token=token).first()
+    if reset is None or not reset.is_valid():
+        return jsonify({"error": "This reset link is invalid or has expired"}), 400
+
+    user = db.session.get(User, reset.user_id)
+    user.set_password(password)
+    reset.used_at = db.func.now()
+    db.session.commit()
+
+    return jsonify({"message": "Password updated. You can now log in."})

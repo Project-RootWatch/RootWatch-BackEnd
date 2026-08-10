@@ -37,6 +37,34 @@ class User(db.Model):
         return {"id": self.id, "email": self.email, "created_at": to_utc_iso(self.created_at)}
 
 
+class PasswordResetToken(db.Model):
+    __tablename__ = "password_reset_tokens"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    token = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used_at = db.Column(db.DateTime, nullable=True)
+
+    @classmethod
+    def create_for(cls, user):
+        now = datetime.now(timezone.utc)
+        reset = cls(
+            user_id=user.id,
+            token=secrets.token_urlsafe(32),
+            created_at=now,
+            expires_at=now + RESET_TOKEN_LIFETIME,
+        )
+        return reset
+
+    def is_valid(self):
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return self.used_at is None and datetime.now(timezone.utc) < expires_at
+
+
 class SensorReading(db.Model):
     __tablename__ = "sensor_readings"
 
