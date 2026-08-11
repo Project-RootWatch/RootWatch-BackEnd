@@ -2,6 +2,7 @@ flask
 flask-cors
 flask-sqlalchemy
 flask-jwt-extended
+flask-limiter
 python-dotenv
 google-genai
 torch

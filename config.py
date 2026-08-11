@@ -24,7 +24,15 @@ class Config:
     # one yet, and is NOT safe to actually run with (anyone who reads the
     # source could forge tokens).
     JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-insecure-secret-change-me")
-    JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=7)
+
+    # Short-lived: sent on every API call, so a leaked one is only useful
+    # for a few minutes. Getting a new one is what the refresh token is for.
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=15)
+
+    # Long-lived: used for exactly one thing (POST /api/auth/refresh), never
+    # sent to a regular endpoint. This is what actually keeps someone logged
+    # in for weeks without re-entering a password.
+    JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
 
     # Used to build the password-reset link. Point this at wherever the web
     # dashboard actually runs.

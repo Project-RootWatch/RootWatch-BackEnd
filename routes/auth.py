@@ -2,9 +2,9 @@ import re
 from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
-from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
+from flask_jwt_extended import create_access_token, create_refresh_token, get_jwt_identity, jwt_required
 
-from extensions import db
+from extensions import db, limiter
 from mailer import send_reset_email
 from models import PasswordResetToken, User
 
@@ -14,7 +14,16 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD_LENGTH = 8
 
 
+def _issue_tokens(user):
+    identity = str(user.id)
+    return {
+        "access_token": create_access_token(identity=identity),
+        "refresh_token": create_refresh_token(identity=identity),
+    }
+
+
 @auth_bp.post("/signup")
+@limiter.limit("3 per hour")
 def signup():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
@@ -32,11 +41,11 @@ def signup():
     db.session.add(user)
     db.session.commit()
 
-    token = create_access_token(identity=str(user.id))
-    return jsonify({"access_token": token, "user": user.to_dict()}), 201
+    return jsonify({**_issue_tokens(user), "user": user.to_dict()}), 201
 
 
 @auth_bp.post("/login")
+@limiter.limit("5 per minute")
 def login():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
@@ -46,8 +55,7 @@ def login():
     if user is None or not user.check_password(password):
         return jsonify({"error": "Invalid email or password"}), 401
 
-    token = create_access_token(identity=str(user.id))
-    return jsonify({"access_token": token, "user": user.to_dict()})
+    return jsonify({**_issue_tokens(user), "user": user.to_dict()})
 
 
 @auth_bp.get("/me")
@@ -59,7 +67,19 @@ def me():
     return jsonify(user.to_dict())
 
 
+@auth_bp.post("/refresh")
+@jwt_required(refresh=True)
+def refresh():
+    # refresh=True means this ONLY accepts a refresh token, never a regular
+    # access token — otherwise a leaked access token could be used to mint
+    # itself an endless chain of new ones, defeating the point of it being
+    # short-lived in the first place.
+    identity = get_jwt_identity()
+    return jsonify({"access_token": create_access_token(identity=identity)})
+
+
 @auth_bp.post("/forgot-password")
+@limiter.limit("3 per hour")
 def forgot_password():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
@@ -80,6 +100,7 @@ def forgot_password():
 
 
 @auth_bp.post("/reset-password")
+@limiter.limit("10 per hour")
 def reset_password():
     data = request.get_json(silent=True) or {}
     token = data.get("token") or ""

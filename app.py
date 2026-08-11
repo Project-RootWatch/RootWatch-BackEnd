@@ -5,7 +5,7 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 
 from config import Config
-from extensions import db
+from extensions import db, limiter
 from routes.activity import activity_bp
 from routes.advisory import advisory_bp
 from routes.auth import auth_bp
@@ -27,6 +27,11 @@ def create_app():
         db.create_all()
 
     jwt = JWTManager(app)
+    limiter.init_app(app)
+
+    @app.errorhandler(429)
+    def rate_limited(e):
+        return jsonify({"error": "Too many attempts. Please wait a bit and try again."}), 429
 
     # Match our {"error": "..."} shape everywhere instead of
     # flask-jwt-extended's default {"msg": "..."}, so the frontend has one
