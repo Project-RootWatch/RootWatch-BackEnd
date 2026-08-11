@@ -6,6 +6,7 @@ from flask_jwt_extended import JWTManager
 
 from config import Config
 from extensions import db, limiter
+from models import RevokedToken
 from routes.activity import activity_bp
 from routes.advisory import advisory_bp
 from routes.auth import auth_bp
@@ -47,6 +48,19 @@ def create_app():
     @jwt.expired_token_loader
     def expired_token(header, payload):
         return jsonify({"error": "Session expired, please log in again"}), 401
+
+    # Called on every @jwt_required() request (access AND refresh tokens)
+    # to check the incoming token's jti against the logout denylist. A JWT
+    # is otherwise self-contained — nothing about it changes after it's
+    # issued — so this is the only hook that lets logout actually kill a
+    # token instead of just deleting it client-side.
+    @jwt.token_in_blocklist_loader
+    def check_if_revoked(jwt_header, jwt_payload):
+        return RevokedToken.query.filter_by(jti=jwt_payload["jti"]).first() is not None
+
+    @jwt.revoked_token_loader
+    def revoked_token(header, payload):
+        return jsonify({"error": "Session has been logged out, please log in again"}), 401
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(sensors_bp)

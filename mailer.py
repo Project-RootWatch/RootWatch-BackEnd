@@ -20,3 +20,17 @@ def send_reset_email(email: str, reset_link: str) -> None:
         email,
         reset_link,
     )
+
+
+def send_verification_email(email: str, verify_link: str) -> None:
+    """Dev-mode 'email' for the signup verification link — see
+    send_reset_email's docstring, same idea."""
+    logger.warning(
+        "\n=== VERIFY YOUR EMAIL (dev mode — no real email sent) ===\n"
+        "To: %s\n"
+        "Link: %s\n"
+        "This link expires in 24 hours.\n"
+        "===========================================================",
+        email,
+        verify_link,
+    )

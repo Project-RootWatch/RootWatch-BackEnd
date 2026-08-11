@@ -6,6 +6,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from extensions import db
 
 RESET_TOKEN_LIFETIME = timedelta(hours=1)
+VERIFICATION_TOKEN_LIFETIME = timedelta(hours=24)
 
 
 def to_utc_iso(dt):
@@ -27,6 +28,12 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
+    # Soft gate, not a login requirement: signup logs the user in right
+    # away (there's no real mailbox to block on in dev mode), this just
+    # tracks whether they've clicked the link yet so the frontend can nudge
+    # them. Flip to a hard gate later by checking this in login().
+    is_verified = db.Column(db.Boolean, default=False, nullable=False)
+
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
 
@@ -34,7 +41,12 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
     def to_dict(self):
-        return {"id": self.id, "email": self.email, "created_at": to_utc_iso(self.created_at)}
+        return {
+            "id": self.id,
+            "email": self.email,
+            "created_at": to_utc_iso(self.created_at),
+            "is_verified": self.is_verified,
+        }
 
 
 class PasswordResetToken(db.Model):
@@ -57,6 +69,33 @@ class PasswordResetToken(db.Model):
             expires_at=now + RESET_TOKEN_LIFETIME,
         )
         return reset
+
+    def is_valid(self):
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return self.used_at is None and datetime.now(timezone.utc) < expires_at
+
+
+class EmailVerificationToken(db.Model):
+    __tablename__ = "email_verification_tokens"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    token = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used_at = db.Column(db.DateTime, nullable=True)
+
+    @classmethod
+    def create_for(cls, user):
+        now = datetime.now(timezone.utc)
+        return cls(
+            user_id=user.id,
+            token=secrets.token_urlsafe(32),
+            created_at=now,
+            expires_at=now + VERIFICATION_TOKEN_LIFETIME,
+        )
 
     def is_valid(self):
         expires_at = self.expires_at

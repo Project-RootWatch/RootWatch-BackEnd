@@ -2,11 +2,18 @@ import re
 from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
-from flask_jwt_extended import create_access_token, create_refresh_token, get_jwt_identity, jwt_required
+from flask_jwt_extended import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    get_jwt,
+    get_jwt_identity,
+    jwt_required,
+)
 
 from extensions import db, limiter
-from mailer import send_reset_email
-from models import PasswordResetToken, User
+from mailer import send_reset_email, send_verification_email
+from models import EmailVerificationToken, PasswordResetToken, RevokedToken, User
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
@@ -20,6 +27,19 @@ def _issue_tokens(user):
         "access_token": create_access_token(identity=identity),
         "refresh_token": create_refresh_token(identity=identity),
     }
+
+
+def _revoke_jti(jti, exp_timestamp):
+    if RevokedToken.query.filter_by(jti=jti).first() is not None:
+        return  # already revoked, nothing to do
+    db.session.add(RevokedToken(jti=jti, expires_at=datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)))
+
+
+def _send_verification_email(user):
+    verification = EmailVerificationToken.create_for(user)
+    db.session.add(verification)
+    verify_link = f"{current_app.config['FRONTEND_URL']}/verify-email?token={verification.token}"
+    send_verification_email(user.email, verify_link)
 
 
 @auth_bp.post("/signup")
@@ -39,6 +59,8 @@ def signup():
     user = User(email=email)
     user.set_password(password)
     db.session.add(user)
+    db.session.flush()  # assigns user.id, needed by the verification token below
+    _send_verification_email(user)
     db.session.commit()
 
     return jsonify({**_issue_tokens(user), "user": user.to_dict()}), 201
@@ -76,6 +98,65 @@ def refresh():
     # short-lived in the first place.
     identity = get_jwt_identity()
     return jsonify({"access_token": create_access_token(identity=identity)})
+
+
+@auth_bp.post("/logout")
+@jwt_required()
+def logout():
+    # Revoke the access token that authenticated this request...
+    claims = get_jwt()
+    _revoke_jti(claims["jti"], claims["exp"])
+
+    # ...and, if the client sent it along, the refresh token too — that's
+    # the one that actually matters, since it's what would otherwise let
+    # someone mint fresh access tokens for up to 30 more days.
+    data = request.get_json(silent=True) or {}
+    refresh_token = data.get("refresh_token")
+    if refresh_token:
+        try:
+            refresh_claims = decode_token(refresh_token)
+        except Exception:
+            refresh_claims = None
+        if refresh_claims is not None and refresh_claims.get("type") == "refresh":
+            _revoke_jti(refresh_claims["jti"], refresh_claims["exp"])
+
+    RevokedToken.prune_expired()
+    db.session.commit()
+    return jsonify({"message": "Logged out"})
+
+
+@auth_bp.post("/verify-email")
+@limiter.limit("10 per hour")
+def verify_email():
+    data = request.get_json(silent=True) or {}
+    token = data.get("token") or ""
+
+    verification = EmailVerificationToken.query.filter_by(token=token).first()
+    if verification is None or not verification.is_valid():
+        return jsonify({"error": "This verification link is invalid or has expired"}), 400
+
+    user = db.session.get(User, verification.user_id)
+    user.is_verified = True
+    verification.used_at = datetime.now(timezone.utc)
+    db.session.commit()
+
+    return jsonify({"message": "Email verified.", "user": user.to_dict()})
+
+
+@auth_bp.post("/resend-verification")
+@jwt_required()
+@limiter.limit("3 per hour")
+def resend_verification():
+    user = db.session.get(User, int(get_jwt_identity()))
+    if user is None:
+        return jsonify({"error": "User not found"}), 404
+    if user.is_verified:
+        return jsonify({"message": "This email is already verified."})
+
+    _send_verification_email(user)
+    db.session.commit()
+
+    return jsonify({"message": "Verification email sent."})
 
 
 @auth_bp.post("/forgot-password")
