@@ -8,6 +8,7 @@ Run with: ./.venv/Scripts/python.exe test_forecast_endpoint.py
 
 from datetime import datetime, timedelta, timezone
 
+import numpy as np
 import pandas as pd
 from flask_jwt_extended import create_access_token
 
@@ -16,18 +17,12 @@ from extensions import db
 from models import SensorReading, User
 
 SYNTHETIC_CSV = "ml/data/synthetic_readings.csv"
-
-
-def get_token():
-    user = User.query.first()
-    if user is None:
-        raise SystemExit("No user in the DB — sign up an account first.")
-    with app.app_context():
-        return create_access_token(identity=str(user.id))
+WINDOW = 96
+STEP_MINUTES = 15
+RAW_INTERVAL_SECONDS = 60  # matches the real firmware's POST_INTERVAL_MS
 
 
 def insert_readings(rows):
-    """rows: list of (timestamp, soil_moisture, temperature, light_level)"""
     for ts, moisture, temp, light in rows:
         db.session.add(SensorReading(timestamp=ts, soil_moisture=moisture, temperature=temp, light_level=light))
     db.session.commit()
@@ -38,7 +33,31 @@ def delete_readings_after(marker_id):
     db.session.commit()
 
 
+def synthetic_15min_tail(n=WINDOW):
+    df = pd.read_csv(SYNTHETIC_CSV, parse_dates=["timestamp"]).tail(n)
+    return list(df.itertuples())
+
+
+def upsample_to_raw_cadence(quarter_hour_points, base_time, rng):
+    """Each 15-min synthetic point becomes 15 raw readings 60s apart, with
+    small noise added so the backend's averaging is doing real work rather
+    than just averaging copies of one number."""
+    rows = []
+    steps_per_bucket = (STEP_MINUTES * 60) // RAW_INTERVAL_SECONDS
+    for i, point in enumerate(quarter_hour_points):
+        bucket_start = base_time + timedelta(minutes=STEP_MINUTES * i)
+        for j in range(steps_per_bucket):
+            ts = bucket_start + timedelta(seconds=RAW_INTERVAL_SECONDS * j)
+            moisture = point.soil_moisture + rng.normal(0, 0.3)
+            temp = point.temperature + rng.normal(0, 0.1)
+            light = np.clip(point.light_level + rng.normal(0, 1), 0, 100)
+            rows.append((ts, moisture, temp, light))
+    return rows
+
+
 def run():
+    rng = np.random.default_rng(11)
+
     with app.app_context():
         token = create_access_token(identity=str(User.query.first().id))
         client = app.test_client()
@@ -46,59 +65,52 @@ def run():
 
         marker_id = db.session.query(db.func.max(SensorReading.id)).scalar() or 0
 
-        # --- Test A: current real data (only 49 rows) -> expect 409, not enough history ---
+        # --- Test A: current real data — sparse, big gaps -> expect 409 ---
         resp = client.get("/api/forecast", headers=headers)
-        print("TEST A (real data, insufficient history)")
+        print("TEST A (real data, sparse/gappy)")
         print("  status:", resp.status_code)
         print("  body:  ", resp.get_json())
-        assert resp.status_code == 409, "expected 409 (not enough history)"
+        assert resp.status_code == 409
         print("  PASS\n")
 
-        # --- Test B: 96 rows spaced 60s apart (matches real firmware cadence,
-        #     mismatches the model's 15-min training assumption) -> expect 409 ---
-        now = datetime.now(timezone.utc)
-        wrong_cadence_rows = [
-            (now - timedelta(seconds=60 * (95 - i)), 50.0, 25.0, 50.0) for i in range(96)
-        ]
-        insert_readings(wrong_cadence_rows)
+        # --- Test B: 24h of raw 60s-cadence data with ONE 15-min bucket
+        #     deliberately missing -> expect a clear gap error ---
+        points = synthetic_15min_tail()
+        base = datetime.now(timezone.utc) - timedelta(minutes=STEP_MINUTES * WINDOW)
+        raw_rows = upsample_to_raw_cadence(points, base, rng)
 
+        gap_bucket = 40  # remove all raw rows belonging to this 15-min bucket
+        gap_start = base + timedelta(minutes=STEP_MINUTES * gap_bucket)
+        gap_end = gap_start + timedelta(minutes=STEP_MINUTES)
+        raw_rows_with_gap = [r for r in raw_rows if not (gap_start <= r[0] < gap_end)]
+
+        insert_readings(raw_rows_with_gap)
         resp = client.get("/api/forecast", headers=headers)
-        print("TEST B (96 rows, wrong cadence — 60s instead of 15min)")
+        print("TEST B (24h of 60s-cadence data, one 15-min bucket missing)")
         print("  status:", resp.status_code)
         print("  body:  ", resp.get_json())
-        assert resp.status_code == 409, "expected 409 (spacing mismatch)"
+        assert resp.status_code == 409
         print("  PASS\n")
 
         delete_readings_after(marker_id)
 
-        # --- Test C: 96 rows from the tail of the synthetic CSV, correctly
-        #     spaced 15 minutes apart -> expect a real 200 forecast ---
-        df = pd.read_csv(SYNTHETIC_CSV, parse_dates=["timestamp"]).tail(96)
-        # Re-anchor timestamps to "now" so the spacing check (which only cares
-        # about relative gaps, not absolute recency) sees a clean 15-min series.
-        base = datetime.now(timezone.utc) - timedelta(minutes=15 * 96)
-        synthetic_rows = [
-            (base + timedelta(minutes=15 * i), row.soil_moisture, row.temperature, row.light_level)
-            for i, row in enumerate(df.itertuples())
-        ]
-        insert_readings(synthetic_rows)
-
+        # --- Test C: full 24h of 60s-cadence data, no gaps -> expect a
+        #     real forecast, proving the resampling/averaging works ---
+        insert_readings(raw_rows)  # the complete set, no gap removed this time
         resp = client.get("/api/forecast", headers=headers)
-        print("TEST C (96 correctly-spaced synthetic rows -> real forecast)")
+        print("TEST C (full 24h of 60s-cadence data -> resampled forecast)")
         print("  status:", resp.status_code)
         body = resp.get_json()
-        assert resp.status_code == 200, "expected 200 with a real forecast"
+        assert resp.status_code == 200, body
         forecast = body["forecast"]
-        assert len(forecast) == 24, "expected 24 forecast points (6h horizon)"
-        last_known = synthetic_rows[-1][1]
-        print(f"  last known soil_moisture: {last_known:.1f}%")
-        print(f"  forecast (24 steps, 15min apart):")
-        for point in forecast:
+        assert len(forecast) == 24
+        print(f"  last known (raw, noisy) soil_moisture ~ {points[-1].soil_moisture:.1f}%")
+        for point in forecast[:5]:
             print(f"    {point['timestamp']}  {point['soil_moisture']:.1f}%")
+        print("    ...")
         print("  PASS\n")
 
         delete_readings_after(marker_id)
-
         print("All tests passed. DB restored to original state.")
 
 

@@ -15,11 +15,6 @@ CHECKPOINT_DIR = Path(__file__).resolve().parent.parent / "ml" / "checkpoints"
 METADATA_PATH = CHECKPOINT_DIR / "model_metadata.json"
 WEIGHTS_PATH = CHECKPOINT_DIR / "best_model.pt"
 
-# How far real reading spacing is allowed to drift from the model's
-# trained step size before we refuse to predict rather than silently
-# feeding mismatched-cadence data through it.
-SPACING_TOLERANCE = 0.5  # 50%
-
 _model = None
 _metadata = None
 
@@ -56,50 +51,78 @@ def _unscale(value, params):
     return value * params["scale"] + params["mean"]
 
 
+def _resample_to_buckets(readings, window, step, feature_columns):
+    """
+    The ESP32 posts every ~60s, but the model was trained on 15-minute
+    steps — so raw rows can't go straight into the model. Instead we
+    bucket the raw readings into `window` consecutive `step`-sized windows
+    (anchored to the latest reading, working backwards) and average each
+    bucket's values, one averaged point per training step.
+
+    Returns (rows, error_message) — exactly one is None. `rows` is a list
+    of `window` [feature...] lists in chronological order, ready to scale.
+
+    A bucket with zero raw readings in it is a real gap in history — we
+    refuse to interpolate or fabricate a value for it, since that would
+    quietly feed the model a number nothing actually measured.
+    """
+    if not readings:
+        return None, "No sensor readings yet."
+
+    latest = readings[-1].timestamp
+    start = latest - step * window
+
+    buckets = [[] for _ in range(window)]
+    for r in readings:
+        if r.timestamp < start:
+            continue
+        index = int((r.timestamp - start) / step)
+        if 0 <= index < window:
+            buckets[index].append(r)
+
+    rows = []
+    for i, bucket in enumerate(buckets):
+        if not bucket:
+            gap_start = to_utc_iso(start + step * i)
+            gap_end = to_utc_iso(start + step * (i + 1))
+            return None, (
+                f"Missing sensor data between {gap_start} and {gap_end} — can't build a full "
+                f"{window * step.total_seconds() / 3600:.0f}-hour history without it."
+            )
+        rows.append([sum(getattr(r, col) for r in bucket) / len(bucket) for col in feature_columns])
+
+    return rows, None
+
+
 def predict_forecast():
     """Returns (forecast_points, error_message) — exactly one is None."""
     model, metadata = _load_model()
     window = metadata["window"]
     feature_columns = metadata["feature_columns"]
     scalers = metadata["scalers"]
-    expected_step = timedelta(minutes=metadata["step_minutes"])
+    step = timedelta(minutes=metadata["step_minutes"])
 
-    readings = SensorReading.query.order_by(SensorReading.timestamp.desc()).limit(window).all()
-    readings.reverse()  # oldest -> newest, matching training order
+    # Raw readings can arrive every ~60s, so covering `window` training
+    # steps needs up to `window * step` worth of raw history, not just
+    # `window` raw rows.
+    lookback_start_guess = None
+    latest = SensorReading.query.order_by(SensorReading.timestamp.desc()).first()
+    if latest is not None:
+        lookback_start_guess = latest.timestamp - step * window
 
-    if len(readings) < window:
-        return None, (
-            f"Not enough history yet: need {window} readings, only have {len(readings)}. "
-            "The forecast will become available once enough real data has accumulated."
-        )
+    readings = (
+        SensorReading.query.filter(SensorReading.timestamp >= lookback_start_guess).order_by(SensorReading.timestamp).all()
+        if lookback_start_guess is not None
+        else []
+    )
 
-    # Guard against feeding the model data at the wrong cadence (see
-    # module docstring-equivalent note above — the firmware currently
-    # posts every 60s, the model expects 15-minute steps).
-    gaps = [
-        (readings[i].timestamp - readings[i - 1].timestamp).total_seconds() for i in range(1, len(readings))
-    ]
-    median_gap = sorted(gaps)[len(gaps) // 2]
-    expected_seconds = expected_step.total_seconds()
-    if abs(median_gap - expected_seconds) > expected_seconds * SPACING_TOLERANCE:
-        return None, (
-            f"Readings are spaced ~{median_gap:.0f}s apart, but this model was trained on "
-            f"{expected_seconds:.0f}s steps. Predicting anyway would silently produce a "
-            "meaningless forecast — the firmware's posting interval and the model's training "
-            "interval need to match (or real data needs resampling to match) before this works."
-        )
+    rows, error = _resample_to_buckets(readings, window, step, feature_columns)
+    if error:
+        return None, error
 
-    rows = []
-    for r in readings:
-        row = []
-        for col in feature_columns:
-            raw = getattr(r, col)
-            if raw is None:
-                return None, f"Reading at {to_utc_iso(r.timestamp)} is missing '{col}' — forecasting needs complete rows."
-            row.append(_scale(raw, scalers[col]))
-        rows.append(row)
+    scaled_rows = [[_scale(value, scalers[col]) for value, col in zip(row, feature_columns)] for row in rows]
 
-    x = torch.tensor([rows], dtype=torch.float32)  # (1, window, n_features)
+    x = torch.tensor([scaled_rows], dtype=torch.float32)  # (1, window, n_features)
     with torch.no_grad():
         pred_scaled = model(x).numpy()[0]  # (horizon,)
 
@@ -109,7 +132,7 @@ def predict_forecast():
     last_timestamp = readings[-1].timestamp
     forecast_points = [
         {
-            "timestamp": to_utc_iso(last_timestamp + expected_step * (i + 1)),
+            "timestamp": to_utc_iso(last_timestamp + step * (i + 1)),
             "soil_moisture": p,
         }
         for i, p in enumerate(predictions)
