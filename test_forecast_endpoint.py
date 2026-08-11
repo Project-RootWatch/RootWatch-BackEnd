@@ -65,53 +65,69 @@ def run():
 
         marker_id = db.session.query(db.func.max(SensorReading.id)).scalar() or 0
 
-        # --- Test A: current real data — sparse, big gaps -> expect 409 ---
-        resp = client.get("/api/forecast", headers=headers)
-        print("TEST A (real data, sparse/gappy)")
-        print("  status:", resp.status_code)
-        print("  body:  ", resp.get_json())
-        assert resp.status_code == 409
-        print("  PASS\n")
+        # Everything from here down runs inside try/finally — a failed
+        # assertion must never skip cleanup and leave test rows sitting in
+        # the real database (which is exactly what happened the first time
+        # this script was run without this guard).
+        try:
+            # --- Test A: current real data — sparse, big gaps -> expect 409 ---
+            resp = client.get("/api/forecast", headers=headers)
+            print("TEST A (real data, sparse/gappy)")
+            print("  status:", resp.status_code)
+            print("  body:  ", resp.get_json())
+            assert resp.status_code == 409
+            print("  PASS\n")
 
-        # --- Test B: 24h of raw 60s-cadence data with ONE 15-min bucket
-        #     deliberately missing -> expect a clear gap error ---
-        points = synthetic_15min_tail()
-        base = datetime.now(timezone.utc) - timedelta(minutes=STEP_MINUTES * WINDOW)
-        raw_rows = upsample_to_raw_cadence(points, base, rng)
+            # --- Test B: 24h of raw 60s-cadence data with ONE 15-min bucket
+            #     deliberately missing -> expect a clear gap error ---
+            points = synthetic_15min_tail()
+            base = datetime.now(timezone.utc) - timedelta(minutes=STEP_MINUTES * WINDOW)
+            raw_rows = upsample_to_raw_cadence(points, base, rng)
 
-        gap_bucket = 40  # remove all raw rows belonging to this 15-min bucket
-        gap_start = base + timedelta(minutes=STEP_MINUTES * gap_bucket)
-        gap_end = gap_start + timedelta(minutes=STEP_MINUTES)
-        raw_rows_with_gap = [r for r in raw_rows if not (gap_start <= r[0] < gap_end)]
+            # The endpoint anchors its bucket grid to the ACTUAL latest raw
+            # reading (not our `base` variable) — each bucket only gets 14 of
+            # its 15 minutes filled (15 samples * 60s), so the true last raw
+            # reading lands 1 minute short of base+24h. Derive the gap window
+            # from that same real anchor, or it won't line up with a bucket
+            # boundary the endpoint actually uses.
+            real_latest = raw_rows[-1][0]
+            real_start = real_latest - timedelta(minutes=STEP_MINUTES * WINDOW)
+            gap_bucket = 40  # remove all raw rows belonging to this 15-min bucket
+            gap_start = real_start + timedelta(minutes=STEP_MINUTES * gap_bucket)
+            gap_end = gap_start + timedelta(minutes=STEP_MINUTES)
+            raw_rows_with_gap = [r for r in raw_rows if not (gap_start <= r[0] < gap_end)]
 
-        insert_readings(raw_rows_with_gap)
-        resp = client.get("/api/forecast", headers=headers)
-        print("TEST B (24h of 60s-cadence data, one 15-min bucket missing)")
-        print("  status:", resp.status_code)
-        print("  body:  ", resp.get_json())
-        assert resp.status_code == 409
-        print("  PASS\n")
+            insert_readings(raw_rows_with_gap)
+            resp = client.get("/api/forecast", headers=headers)
+            print("TEST B (24h of 60s-cadence data, one 15-min bucket missing)")
+            print("  status:", resp.status_code)
+            print("  body:  ", resp.get_json())
+            assert resp.status_code == 409
+            print("  PASS\n")
 
-        delete_readings_after(marker_id)
+            delete_readings_after(marker_id)
 
-        # --- Test C: full 24h of 60s-cadence data, no gaps -> expect a
-        #     real forecast, proving the resampling/averaging works ---
-        insert_readings(raw_rows)  # the complete set, no gap removed this time
-        resp = client.get("/api/forecast", headers=headers)
-        print("TEST C (full 24h of 60s-cadence data -> resampled forecast)")
-        print("  status:", resp.status_code)
-        body = resp.get_json()
-        assert resp.status_code == 200, body
-        forecast = body["forecast"]
-        assert len(forecast) == 24
-        print(f"  last known (raw, noisy) soil_moisture ~ {points[-1].soil_moisture:.1f}%")
-        for point in forecast[:5]:
-            print(f"    {point['timestamp']}  {point['soil_moisture']:.1f}%")
-        print("    ...")
-        print("  PASS\n")
+            # --- Test C: full 24h of 60s-cadence data, no gaps -> expect a
+            #     real forecast, proving the resampling/averaging works ---
+            insert_readings(raw_rows)  # the complete set, no gap removed this time
+            resp = client.get("/api/forecast", headers=headers)
+            print("TEST C (full 24h of 60s-cadence data -> resampled forecast)")
+            print("  status:", resp.status_code)
+            body = resp.get_json()
+            assert resp.status_code == 200, body
+            forecast = body["forecast"]
+            assert len(forecast) == 24
+            print(f"  last known (raw, noisy) soil_moisture ~ {points[-1].soil_moisture:.1f}%")
+            for point in forecast[:5]:
+                print(f"    {point['timestamp']}  {point['soil_moisture']:.1f}%")
+            print("    ...")
+            print("  PASS\n")
 
-        delete_readings_after(marker_id)
-        print("All tests passed. DB restored to original state.")
+            print("All tests passed.")
+        finally:
+            delete_readings_after(marker_id)
+            remaining = SensorReading.query.count()
+            print(f"Cleanup done — {remaining} rows remain (should match what existed before this script ran).")
 
 
 if __name__ == "__main__":
