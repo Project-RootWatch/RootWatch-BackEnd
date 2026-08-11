@@ -65,6 +65,29 @@ class PasswordResetToken(db.Model):
         return self.used_at is None and datetime.now(timezone.utc) < expires_at
 
 
+class RevokedToken(db.Model):
+    """A denylist of JWT IDs (`jti`) that must be rejected even though
+    they're still cryptographically valid and unexpired. Populated on
+    logout — that's the only way to actually kill a token before its
+    natural expiry, since JWTs otherwise remain valid wherever they end up
+    until then."""
+
+    __tablename__ = "revoked_tokens"
+
+    id = db.Column(db.Integer, primary_key=True)
+    jti = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    revoked_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    @classmethod
+    def prune_expired(cls):
+        # Opportunistic cleanup so this table doesn't grow forever — once a
+        # token's own expiry has passed, flask-jwt-extended would reject it
+        # on that basis alone, so keeping its denylist row around serves no
+        # purpose.
+        cls.query.filter(cls.expires_at < datetime.now(timezone.utc)).delete()
+
+
 class SensorReading(db.Model):
     __tablename__ = "sensor_readings"
 
